@@ -36,7 +36,7 @@ async function connectToMongo() {
     try {
         await connectToMongo();
 
-        app.listen(port, () => {
+        app.listen(port, "0.0.0.0", () => {
             console.log(
                 `Server is alive on http://localhost:${port}`
             );
@@ -48,10 +48,50 @@ async function connectToMongo() {
     }
 })();
 
+const adminOnly = async (req, res, next) => {
+    try {
+        const email = req.headers["x-user-email"];
+
+        if (!email) {
+            return res.status(401).json({
+                message: "Authentication required"
+            });
+        }
+
+        const collection = db.collection("UsersInformation");
+
+        const user = await collection.findOne({
+            email: email.toLowerCase()
+        });
+
+        if (!user) {
+            return res.status(401).json({
+                message: "User not found"
+            });
+        }
+
+        if (user.role !== "admin") {
+            return res.status(403).json({
+                message: "Admin access required"
+            });
+        }
+
+        req.admin = user;
+
+        next();
+
+    } catch (error) {
+        console.error("Admin verification error:", error);
+
+        res.status(500).json({
+            message: "Failed to verify admin access"
+        });
+    }
+};
+
 // Endpoint for Signup
 app.post("/signup", async (req, res) => {
     try {
-
         const {
             fullName,
             email,
@@ -64,35 +104,44 @@ app.post("/signup", async (req, res) => {
             });
         }
 
-        // Basic Input Validation
         if (!email || !email.includes("@")) {
-            return res.status(400).json({ message: "Invalid email format" });
+            return res.status(400).json({
+                message: "Invalid email format"
+            });
         }
 
         if (!password || password.length < 6) {
-            return res.status(400).json({ message: "Password must be at least 6 characters" });
+            return res.status(400).json({
+                message: "Password must be at least 6 characters"
+            });
         }
 
         const collection = db.collection("UsersInformation");
 
-        // Check if user already exists
-        const existingUser = await collection.findOne({ email: email.toLowerCase() });
+        const normalizedEmail = email.toLowerCase();
+
+        const existingUser = await collection.findOne({
+            email: normalizedEmail
+        });
+
         if (existingUser) {
-            return res.status(400).json({ message: "Email is already registered" });
+            return res.status(400).json({
+                message: "Email is already registered"
+            });
         }
 
-        // Simple Password Encoding (Base64)
-        const encodedPassword = Buffer.from(password).toString("base64");
+        const encodedPassword = Buffer
+            .from(password)
+            .toString("base64");
 
-        // Save to MongoDB
         const result = await collection.insertOne({
-            fullName,
-            email: email.toLowerCase(),
+            fullName: fullName.trim(),
+            email: normalizedEmail,
             password: encodedPassword,
+            role: "user",
             createdAt: new Date(),
         });
 
-        // Success Response
         res.status(201).json({
             message: "User created successfully",
             userId: result.insertedId,
@@ -100,7 +149,10 @@ app.post("/signup", async (req, res) => {
 
     } catch (error) {
         console.error("Signup error:", error);
-        res.status(500).json({ message: "Internal server error" });
+
+        res.status(500).json({
+            message: "Internal server error"
+        });
     }
 });
 
@@ -134,7 +186,8 @@ app.post("/login", async (req, res) => {
             user: {
                 id: user._id,
                 email: user.email,
-                fullName: user.fullName
+                fullName: user.fullName,
+                role: user.role || "user"
             }
         });
     } catch (error) {
@@ -637,7 +690,7 @@ app.post("/orders", async (req, res) => {
     }
 });
 
-app.get("/orders", async (req, res) => {
+app.get("/orders", adminOnly, async (req, res) => {
     try {
         const collection = db.collection("Orders");
 
@@ -747,7 +800,7 @@ app.get("/orders/number/:orderNumber", async (req, res) => {
     }
 });
 
-app.put("/orders/:id/status", async (req, res) => {
+app.put("/orders/:id/status", adminOnly, async (req, res) => {
     try {
         const { status } = req.body;
 
@@ -807,7 +860,7 @@ app.put("/orders/:id/status", async (req, res) => {
     }
 });
 
-app.put("/orders/:id/payment-status", async (req, res) => {
+app.put("/orders/:id/payment-status", adminOnly, async (req, res) => {
     try {
         const { paymentStatus } = req.body;
 
@@ -872,7 +925,7 @@ app.put("/orders/:id/payment-status", async (req, res) => {
     }
 });
 
-app.delete("/orders/:id", async (req, res) => {
+app.delete("/orders/:id", adminOnly, async (req, res) => {
     try {
         if (!ObjectId.isValid(req.params.id)) {
             return res.status(400).json({
@@ -905,3 +958,4 @@ app.delete("/orders/:id", async (req, res) => {
         });
     }
 });
+
