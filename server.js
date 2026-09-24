@@ -1,6 +1,7 @@
 require('dotenv').config();
 const express = require("express");
 const cors = require("cors"); // Fix 1: Imported CORS package
+const bcrypt = require("bcryptjs");
 const { MongoClient, ObjectId } = require("mongodb");
 
 const app = express();
@@ -12,6 +13,16 @@ app.use(express.json());
 
 // MongoDB connection string
 const uri = process.env.MONGODB_URI;
+
+// FIX: previously a missing MONGODB_URI would fail only once something tried to use `db` (
+if (!uri) {
+    console.error(
+        "Missing MONGODB_URI environment variable. Add it to your .env file before starting the server."
+    );
+    process.exit(1);
+}
+
+const SALT_ROUNDS = 10;
 
 // Mongo variables
 let client, db;
@@ -29,8 +40,10 @@ async function connectToMongo() {
 
     } catch (error) {
         console.error("MongoDB connection error:", error);
+        throw error;
     }
 }
+// connectToMongo() now re-throws, so a failed connection is caught by the block below and exits the process instead of the server silently starting up with no database.)
 
 (async () => {
     try {
@@ -130,14 +143,16 @@ app.post("/signup", async (req, res) => {
             });
         }
 
-        const encodedPassword = Buffer
-            .from(password)
-            .toString("base64");
+        // FIX: passwords were being stored as Buffer.from(password)
+        // .toString("base64") — that's encoding, not hashing, and is
+        // trivially reversible by anyone with DB read access. bcrypt
+        // hashes are one-way and salted per-user.
+        const hashedPassword = await bcrypt.hash(password, SALT_ROUNDS);
 
         const result = await collection.insertOne({
             fullName: fullName.trim(),
             email: normalizedEmail,
-            password: encodedPassword,
+            password: hashedPassword,
             role: "user",
             createdAt: new Date(),
         });
@@ -174,10 +189,9 @@ app.post("/login", async (req, res) => {
             return res.status(400).json({ message: "Invalid email or password" });
         }
 
-        // Decode stored Base64 password to check match
-        const decodedPassword = Buffer.from(user.password, "base64").toString("utf-8");
+        const passwordMatches = await bcrypt.compare(password, user.password);
 
-        if (decodedPassword !== password) {
+        if (!passwordMatches) {
             return res.status(400).json({ message: "Invalid email or password" });
         }
 
@@ -958,4 +972,3 @@ app.delete("/orders/:id", adminOnly, async (req, res) => {
         });
     }
 });
-
