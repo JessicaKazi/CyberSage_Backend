@@ -1,6 +1,6 @@
 require('dotenv').config();
 const express = require("express");
-const cors = require("cors"); // Fix 1: Imported CORS package
+const cors = require("cors"); // Imported CORS package
 const bcrypt = require("bcryptjs");
 const { MongoClient, ObjectId } = require("mongodb");
 
@@ -14,52 +14,80 @@ app.use(express.json());
 // MongoDB connection string
 const uri = process.env.MONGODB_URI;
 
-// FIX: previously a missing MONGODB_URI would fail only once something tried to use `db` (
-if (!uri) {
-    console.error(
-        "Missing MONGODB_URI environment variable. Add it to your .env file before starting the server."
-    );
-    process.exit(1);
-}
+// previously a missing MONGODB_URI would fail only once something tried to use `db` (
 
 const SALT_ROUNDS = 10;
 
-// Mongo variables
-let client, db;
+let client;
+let db;
 
-// Connect to MongoDB
-async function connectToMongo() {
+async function connectToMongo(
+    connectionString = uri,
+    databaseName = process.env.MONGODB_DATABASE || "Cluster10"
+) {
+    if (!connectionString) {
+        throw new Error("MONGODB_URI is not configured");
+    }
+
+    const newClient = new MongoClient(connectionString);
+
     try {
-        client = new MongoClient(uri);
+        await newClient.connect();
 
-        await client.connect();
+        client = newClient;
+        db = client.db(databaseName);
 
         console.log("Connected to MongoDB");
 
-        db = client.db("Cluster10");
-
+        return db;
     } catch (error) {
-        console.error("MongoDB connection error:", error);
+        await newClient.close().catch(() => {});
         throw error;
     }
 }
-// connectToMongo() now re-throws, so a failed connection is caught by the block below and exits the process instead of the server silently starting up with no database.)
 
-(async () => {
-    try {
-        await connectToMongo();
+function getDb() {
+    if (!db) {
+        throw new Error("MongoDB is not connected");
+    }
 
-        app.listen(port, "0.0.0.0", () => {
-            console.log(
-                `Server is alive on http://localhost:${port}`
-            );
-        });
+    return db;
+}
 
-    } catch (error) {
+async function closeMongo() {
+    if (client) {
+        await client.close();
+        client = null;
+        db = null;
+    }
+}
+
+// connectToMongo() now re-thows, so a failed connection is caught by the block below and exits the process instead of the server silently starting up with no database.
+
+
+async function startServer() {
+    await connectToMongo();
+
+    return app.listen(port, "0.0.0.0", () => {
+        console.log(`Server is alive on http://localhost:${port}`);
+    });
+}
+
+if (require.main === module) {
+    startServer().catch((error) => {
         console.error(error);
         process.exit(1);
-    }
-})();
+    });
+}
+
+module.exports = {
+    app,
+    startServer,
+    connectToMongo,
+    closeMongo,
+    getDb
+};
+
 
 const adminOnly = async (req, res, next) => {
     try {
@@ -143,7 +171,7 @@ app.post("/signup", async (req, res) => {
             });
         }
 
-        // FIX: passwords were being stored as Buffer.from(password)
+        // what to fix passwords were being stored as Buffer.from(password)
         // .toString("base64") — that's encoding, not hashing, and is
         // trivially reversible by anyone with DB read access. bcrypt
         // hashes are one-way and salted per-user.
@@ -972,3 +1000,5 @@ app.delete("/orders/:id", adminOnly, async (req, res) => {
         });
     }
 });
+
+module.exports = { app };
